@@ -26,6 +26,7 @@ const PROVIDERS = {
   mistral: { label: 'Mistral', url: 'https://api.mistral.ai/v1', env: 'MISTRAL_API_KEY' },
   custom: { label: 'Custom (customUrl in config)' },
   claude: { label: 'Claude Code (sends to the terminal agent)', kind: 'claude' },
+  opencode: { label: 'OpenCode (sends to the terminal agent)', kind: 'opencode' },
 };
 
 // no bypassPermissions: a chat bubble on the desktop shouldn't run anything without asking
@@ -72,6 +73,7 @@ async function models(id, cfg) {
   const p = endpoint(id, cfg);
   if (p.kind === 'ollama') return ollama.models().catch(() => null);
   if (p.kind === 'claude') return claudeVersion().then(() => ['Claude Code']);
+  if (p.kind === 'opencode') return opencodeVersion().then(() => ['OpenCode']);
   // what's missing has a code, so her setup knows what to ask for (setup.js)
   if (!p.url) throw Object.assign(new Error('no address set for this server'), { code: 'nourl' });
   if (p.env && !p.key) throw Object.assign(new Error(`no API key (or ${p.env})`), { code: 'nokey' });
@@ -205,13 +207,76 @@ function restoreClaude(saved) {
   claudeStarted = Boolean(claudeSession && saved.started);
 }
 
-const isChatSession = (id) => Boolean(id) && id === claudeSession;
+// --- OpenCode ------------------------------------------------------------------------------------
+// Like Claude Code, but through `opencode run`: her messages become its prompts, one session kept for
+// the whole chat. `--format json` streams events; the answer's text comes from the `text` parts.
+
+let opencodeSession = null; // its session id, read from the first step_start, reused after
+
+function opencodeVersion() {
+  return new Promise((resolve, reject) => {
+    execFile('opencode', ['--version'], { timeout: 10000 }, (err, out) => (
+      err ? reject(new Error('OpenCode not found (is `opencode` on your PATH?)')) : resolve(out.trim())));
+  });
+}
+
+function opencodeChat(cfg, text, persona, onDelta, signal) {
+  const first = !opencodeSession;
+  const prompt = first && persona ? `${persona}\n\n${text}` : text;
+  const args = ['run', '--format', 'json'];
+  if (opencodeSession) args.push('--session', opencodeSession);
+  args.push(prompt);
+  return new Promise((resolve, reject) => {
+    const child = spawn('opencode', args, {
+      cwd: cfg.claudeCwd || os.homedir(),
+      windowsHide: true,
+    });
+    signal.addEventListener('abort', () => child.kill(), { once: true });
+    let buffer = '';
+    let all = '';
+    let errors = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.sessionID) opencodeSession = msg.sessionID;
+        if (msg.type === 'error') { errors = msg.error?.message || 'OpenCode failed'; return; }
+        const part = msg.part;
+        const piece = part?.type === 'text' ? part.text : typeof msg.text === 'string' ? msg.text : typeof msg.delta === 'string' ? msg.delta : '';
+        if (piece) {
+          all += piece;
+          onDelta(piece);
+        }
+      }
+    });
+    child.stderr.on('data', (chunk) => { errors += chunk; });
+    child.on('error', reject);
+    child.on('close', () => {
+      if (signal.aborted) return reject(new Error('stopped'));
+      if (!all) return reject(new Error(errors.trim().slice(0, 300) || 'OpenCode gave no answer'));
+      resolve(all);
+    });
+  });
+}
+
+function resetOpencode() {
+  opencodeSession = null;
+}
+
+const isChatSession = (id) => Boolean(id) && (id === claudeSession || id === `opencode:${opencodeSession}`);
 
 async function chat(id, cfg, { model, messages }, onDelta, signal) {
   const p = endpoint(id, cfg);
   if (p.kind === 'ollama') return ollama.chat({ model, messages }, onDelta, signal);
-  // Claude Code keeps its own memory of the conversation: only her persona and your last message go
+  // Claude Code and OpenCode keep their own memory of the conversation: only her persona and your
+  // last message go
   if (p.kind === 'claude') return claudeChat(cfg, messages.at(-1).content, messages[0].content, onDelta, signal);
+  if (p.kind === 'opencode') return opencodeChat(cfg, messages.at(-1).content, messages[0].content, onDelta, signal);
   return openaiChat(p, { model, messages }, onDelta, signal);
 }
 
@@ -224,4 +289,4 @@ function isLocal(id, cfg, model) {
   return Boolean(PROVIDERS[id].local);
 }
 
-module.exports = { isLocal, PROVIDERS, CLAUDE_MODES, models, warm, chat, resetClaude, isChatSession, claudeMemory, restoreClaude };
+module.exports = { isLocal, PROVIDERS, CLAUDE_MODES, models, warm, chat, resetClaude, resetOpencode, isChatSession, claudeMemory, restoreClaude };

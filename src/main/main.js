@@ -30,6 +30,10 @@ const DEV = process.argv.includes('--dev');
 const PORT = Number(process.env.CAPRI_PORT) || 47823;
 const SOUND_EXT = /\.(mp3|wav|ogg|m4a)$/i;
 
+// forward mouse-moves while click-through: Windows and macOS only (their mouse path supports it);
+// Linux ignores the option, and passing it can leave the input shape wrong.
+const fwd = () => (process.platform === 'linux' ? undefined : { forward: true });
+
 const OLLAMA_SITE = 'https://ollama.com';
 
 protocol.registerSchemesAsPrivileged([
@@ -39,6 +43,7 @@ protocol.registerSchemesAsPrivileged([
 let overlay = null;
 let tray = null;
 let trayMenu = null; // also what she opens when you right-click her
+const menuActions = new Map(); // menu item id -> its click, for the overlay's drawn menu
 let demoTimer = null;
 let windowWatch = null;
 // the watcher only speaks when something changes: the overlay asks for this when it (re)loads
@@ -70,6 +75,7 @@ function saveMemory(patch) {
 }
 function forgetChats() {
   llm.resetClaude();
+  llm.resetOpencode();
   saveMemory({ history: [], claude: null });
   sendCommand('forget');
 }
@@ -149,7 +155,7 @@ function fitOverlay() {
 function rearmOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
   overlay.setIgnoreMouseEvents(false);
-  overlay.setIgnoreMouseEvents(true, { forward: true });
+  overlay.setIgnoreMouseEvents(true, fwd());
   overlay.setAlwaysOnTop(true, 'screen-saver');
   fitOverlay();
   sendCommand('rearmed'); // click-through again: she waits for the pointer to be on her
@@ -175,7 +181,6 @@ function createOverlay() {
     backgroundColor: '#00000000',
     frame: false,
     resizable: false,
-    movable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
@@ -196,12 +201,13 @@ function createOverlay() {
   });
 
   overlay.setAlwaysOnTop(true, 'screen-saver');
-  overlay.setIgnoreMouseEvents(true, { forward: true });
+  // On Linux, map with the region OPEN: Xwayland commits the first input shape reliably, but later
+  // toggles can be lost. The renderer closes it as soon as it knows where the pointer is.
+  overlay.setIgnoreMouseEvents(process.platform === 'linux' ? false : true, fwd());
   overlay.loadURL('capri://app/src/renderer/index.html');
   // always shown: put away, she's still there as her biochip in the corner. Sized again first:
   // Windows keeps a new window inside the work area, and resting on the taskbar it covers it too.
   overlay.once('ready-to-show', () => {
-    fitOverlay();
     overlay.showInactive();
   });
   overlay.webContents.on('render-process-gone', (_e, details) => {
@@ -281,7 +287,7 @@ function resolveLang(setting) {
 // What the overlay gets: `lang` is the resolved one, `langSetting` what the user picked.
 function rendererConfig() {
   const { apiKeys, ...cfg } = config.load(); // the keys stay here: the overlay only learns which ones are set
-  return { ...cfg, keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap };
+  return { ...cfg, keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap, mouseHook: process.platform === 'win32', regionOpen: process.platform === 'linux' };
 }
 
 function updateConfig(patch) {
@@ -297,7 +303,6 @@ function updateConfig(patch) {
 }
 
 function rebuildTray() {
-  if (!tray) return;
   const cfg = config.load();
   const hookState = activeHooks().status();
   const watched = activeAssistant();
@@ -318,7 +323,7 @@ function rebuildTray() {
   };
   const cancelReminder = (id) => updateConfig({ reminders: (config.load().reminders || []).filter((r) => r.id !== id) });
 
-  const menu = Menu.buildFromTemplate([
+  const template = [
     { label: t.online(PORT), enabled: false },
     { label: t.sync(Math.min(100, Math.floor(xp / 10)), t.stages[stage]), enabled: false },
     { type: 'separator' },
@@ -350,7 +355,7 @@ function rebuildTray() {
     {
       label: t.sound,
       submenu: [
-        { label: t.mute, type: 'checkbox', checked: cfg.muted, click: (item) => updateConfig({ muted: item.checked }) },
+        { label: t.mute, type: 'checkbox', checked: cfg.muted, click: () => updateConfig({ muted: !cfg.muted }) },
         { type: 'separator' },
         {
           label: t.soundsDir,
@@ -372,7 +377,7 @@ function rebuildTray() {
           click: () => d.id !== current && sendCommand('goScreen', { id: d.id }), // she goes over there herself
         })),
         { type: 'separator' },
-        { label: t.follow, type: 'checkbox', checked: cfg.follow !== false, click: (item) => updateConfig({ follow: item.checked }) },
+        { label: t.follow, type: 'checkbox', checked: cfg.follow !== false, click: () => updateConfig({ follow: cfg.follow === false }) },
       ],
     },
     {
@@ -412,15 +417,15 @@ function rebuildTray() {
         { label: t.apiKey, click: () => sendCommand('setupKey') },
       ],
     },
-    { label: t.wander, type: 'checkbox', checked: cfg.wander, click: (item) => updateConfig({ wander: item.checked }) },
-    { label: t.possess, type: 'checkbox', checked: cfg.possess, click: (item) => updateConfig({ possess: item.checked }) },
-    { label: t.jealous, type: 'checkbox', checked: cfg.jealous !== false, click: (item) => updateConfig({ jealous: item.checked }) },
-    { label: t.pcReact, type: 'checkbox', checked: cfg.pcReact !== false, click: (item) => updateConfig({ pcReact: item.checked }) },
+    { label: t.wander, type: 'checkbox', checked: cfg.wander, click: () => updateConfig({ wander: !cfg.wander }) },
+    { label: t.possess, type: 'checkbox', checked: cfg.possess, click: () => updateConfig({ possess: !cfg.possess }) },
+    { label: t.jealous, type: 'checkbox', checked: cfg.jealous !== false, click: () => updateConfig({ jealous: cfg.jealous === false }) },
+    { label: t.pcReact, type: 'checkbox', checked: cfg.pcReact !== false, click: () => updateConfig({ pcReact: cfg.pcReact === false }) },
     {
       // she asks first (what she'll send where), then turns it on herself
       label: t.lookAuto, type: 'checkbox', checked: Boolean(cfg.watchScreen),
-      click: (item) => {
-        sendCommand('watchScreen', { on: item.checked });
+      click: () => {
+        sendCommand('watchScreen', { on: !cfg.watchScreen });
         rebuildTray(); // as it is until she's asked
       },
     },
@@ -476,7 +481,7 @@ function rebuildTray() {
       label: t.startup,
       type: 'checkbox',
       checked: app.getLoginItemSettings(loginItemOptions()).openAtLogin,
-      click: (item) => app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: item.checked }),
+      click: () => app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: !app.getLoginItemSettings(loginItemOptions()).openAtLogin }),
     },
     // her hooks, while she watches Claude Code
     ...(cfg.claude ? [
@@ -488,9 +493,30 @@ function rebuildTray() {
     ] : []),
     { type: 'separator' },
     { label: t.quit, click: () => app.quit() },
-  ]);
-  tray.setContextMenu(menu);
-  trayMenu = menu;
+  ];
+  tagMenu(template);
+  menuTemplate = template;
+  trayMenu = Menu.buildFromTemplate(template);
+  tray?.setContextMenu(trayMenu);
+}
+
+// A drawn menu for the overlay (the native one can't take clicks under some Linux compositors):
+// each item gets an id, its click is kept here, and the labels/checks go to the renderer.
+let menuTemplate = [];
+function tagMenu(items, path = []) {
+  items.forEach((item, i) => {
+    item.id = [...path, i].join('.');
+    if (item.click) menuActions.set(item.id, item.click);
+    if (item.submenu) tagMenu(item.submenu, [...path, i]);
+  });
+}
+
+function serializeMenu(items) {
+  return items.filter((it) => it.visible !== false).map((it) => ({
+    id: it.id, label: it.label, type: it.type, checked: Boolean(it.checked),
+    enabled: it.enabled !== false, accelerator: it.accelerator,
+    submenu: it.submenu ? serializeMenu(it.submenu) : undefined,
+  }));
 }
 
 // Run from a clone (`npm start`), electron.exe alone would open the default Electron app at login:
@@ -675,7 +701,14 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.on('overlay:interactive', (_e, on) => {
-    overlay?.setIgnoreMouseEvents(!on, { forward: true });
+    if (DEV) console.log('[capri] interactive', on);
+    overlay?.setIgnoreMouseEvents(!on, fwd());
+    // Xwayland only applies a changed input shape on a surface commit, and it doesn't commit on a
+    // shape change alone: remap the window to force one.
+    if (process.platform === 'linux' && overlay && overlay.isVisible()) {
+      overlay.hide();
+      overlay.showInactive();
+    }
   });
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
   ipcMain.handle('overlay:cursor', () => {
@@ -705,8 +738,16 @@ function registerIpc() {
   ipcMain.handle('hooks:status', () => activeHooks().status());
   ipcMain.handle('config:set', (_e, patch) => updateConfig(patch));
   ipcMain.handle('demo:window', (_e, open) => demoWindow(open));
-  // right-clicking her: the same menu as the tray icon (which Windows often hides behind the ^ by the clock)
-  ipcMain.on('menu:open', () => trayMenu?.popup({ window: overlay }));
+  // right-clicking her: her menu, drawn in the overlay (the native popup can't take clicks under some
+  // Linux compositors). `pos` is where the pointer is, in overlay pixels.
+  ipcMain.on('menu:open', (_e, pos) => {
+    rebuildTray(); // fresh checks (models, screens, hooks)
+    overlay?.webContents.send('capri:command', { name: 'menu', items: serializeMenu(menuTemplate), x: pos?.x, y: pos?.y });
+  });
+  ipcMain.on('menu:click', (_e, id) => {
+    menuActions.get(String(id))?.();
+    overlay?.webContents.send('capri:command', { name: 'menu', items: null }); // close it
+  });
   // her welcome panel's buttons
   ipcMain.handle('hooks:install', () => runHooks('install', { quiet: true }));
   ipcMain.handle('claude:found', () => fs.existsSync(path.dirname(activeHooks().status().file))); // Claude Code keeps its settings there
@@ -722,7 +763,7 @@ function registerIpc() {
     const model = pickModel();
     llm.warm(provider, model); // loading while you type your first message
     const local = llm.isLocal(provider, cfg, model);
-    return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local };
+    return { ok: true, provider, model, agent: provider === 'claude' || provider === 'opencode', local, warmup: provider === 'ollama' && local };
   });
   // her answer, streamed to the overlay piece by piece as `chat:delta`
   ipcMain.handle('chat:send', async (_e, { id, messages }) => {
@@ -946,12 +987,14 @@ async function debugHandler(route, body) {
     return { ok: true };
   }
   if (route === 'mouse') {
-    // the pointer moving over the overlay (css px), and clicking if asked, without touching the real one
+    // the pointer moving over the overlay (css px), and clicking if asked (left, or body.button),
+    // without touching the real one
     const at = { x: Math.round(body.x), y: Math.round(body.y) };
+    const button = body.button === 'right' ? 'right' : 'left';
     overlay.webContents.sendInputEvent({ type: 'mouseMove', ...at });
     if (body.click) {
-      overlay.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...at });
-      overlay.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...at });
+      overlay.webContents.sendInputEvent({ type: 'mouseDown', button, clickCount: 1, ...at });
+      overlay.webContents.sendInputEvent({ type: 'mouseUp', button, clickCount: 1, ...at });
     }
     return { ok: true };
   }
@@ -1017,7 +1060,23 @@ function applyRender() {
   if (DEV) app.whenReady().then(() => setTimeout(() => console.log('[capri] display:', render, JSON.stringify(app.getGPUFeatureStatus())), 4000));
 }
 
+// On Wayland a window has no say in where it goes or on what it sits. Through XWayland, when there
+// is one, the overlay lands exactly on the work area and stays above the other windows (an X11
+// window that never takes focus is unmanaged, which tiling compositors leave alone). Electron picks
+// its backend before any of this runs, so she starts again with the switch; CAPRI_OZONE picks it by
+// hand, and a --ozone-platform flag on the command line wins over both.
+function relaunchOnXWayland() {
+  if (process.platform !== 'linux' || process.argv.some((arg) => arg.startsWith('--ozone-platform'))) return false;
+  const wanted = process.env.CAPRI_OZONE
+    || (process.env.WAYLAND_DISPLAY && process.env.DISPLAY ? 'x11' : null);
+  if (!wanted || app.commandLine.getSwitchValue('ozone-platform') === wanted) return false;
+  app.relaunch({ args: [...process.argv.slice(1), `--ozone-platform=${wanted}`] });
+  app.exit(0);
+  return true;
+}
+
 function main() {
+  if (relaunchOnXWayland()) return;
   applyRender();
   if (!app.requestSingleInstanceLock()) {
     app.quit();
@@ -1027,7 +1086,7 @@ function main() {
   if (process.platform === 'win32') app.setAppUserModelId('capri.desktop');
 
   app.whenReady().then(() => {
-    if (!['codex', 'claude'].includes(config.load().assistant)) config.save({ assistant: activeAssistant().id });
+    if (!ASSISTANTS[config.load().assistant]) config.save({ assistant: activeAssistant().id });
     serveProtocol();
     registerIpc();
     createOverlay();
@@ -1048,6 +1107,7 @@ function main() {
       onDebug: DEV ? debugHandler : null,
     });
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
+    if (DEV && !globalShortcut.isRegistered('Control+Alt+C')) console.log('[capri] Ctrl+Alt+C is taken by another app');
     llm.restoreClaude(readMemory().claude);
     refreshModels(); // for her menu's model list
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask

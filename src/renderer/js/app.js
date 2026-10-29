@@ -13,10 +13,14 @@ import { Bond, Jealousy } from './bond.js';
 import { Reminders, clock } from './reminders.js';
 import { Look } from './look.js';
 import { Pc } from './pc.js';
+import { Menu } from './menu.js';
 import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
 
 const host = window.host;
+
+// her menu (drawn in the overlay), built once: main.js sends its items when she's right-clicked
+const menu = new Menu(host);
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -30,6 +34,7 @@ function loadImage(src) {
 // close-ups of her for the cut-ins, frames of the show (tools/build-cutins.py)
 const CUTINS = ['grin', 'laugh', 'eyes', 'many', 'look'];
 const WATCH_MS = 2000; // how often she checks the pointer still reaches her
+const POINTER_MS = 100; // how often she reads the pointer to know if it is over her
 const FOLLOW_AFTER = 2; // checks in a row with the pointer on another screen before she follows it there
 const AWAY_MS = 15 * 60 * 1000; // the pointer still this long: you were away from your PC
 const SNOOZE_MS = 10 * 60 * 1000;
@@ -98,15 +103,30 @@ async function boot() {
   const brain = new Brain({ capri, panel, voice, host, mission, lang: config.lang, assistant: config.assistant });
 
   // Click-through everywhere except on her body, the panel and her biochip.
-  let interactive = false;
+  let interactive = Boolean(config.regionOpen); // Linux maps with the region open
   let mouse = null;
+  let closeTimer = 0;
   const setInteractive = (on) => {
-    if (on === interactive) return;
-    interactive = on;
-    host.setInteractive(on);
+    if (on) {
+      clearTimeout(closeTimer);
+      closeTimer = 0;
+      if (interactive) return;
+      interactive = true;
+      host.setInteractive(true);
+    } else {
+      if (!interactive || closeTimer) return;
+      // hold the click-through area a moment, so it doesn't flap while she moves under the pointer
+      closeTimer = setTimeout(() => {
+        closeTimer = 0;
+        if (!interactive) return;
+        interactive = false;
+        host.setInteractive(false);
+      }, 300);
+    }
   };
   const onChip = () => Boolean(chip.visible && mouse && chip.contains(mouse.x, mouse.y, 0));
   const refreshHit = () => {
+    if (menu.open) return setInteractive(true); // her open menu takes clicks anywhere over it
     if (capri.dragging) return setInteractive(true);
     if (!mouse) return setInteractive(false);
     const r = panel.rect();
@@ -151,32 +171,34 @@ async function boot() {
     refreshHit();
     hoverChip();
   });
-  // Where the pointer really is, every couple of seconds: if it moved over her window and no
-  // mousemove came, the hook that brings it to her is gone (Windows drops it without a word, after
-  // sleep say), and main.js puts in a new one.
+  // Where the pointer really is: over her, the window has to let the clicks in, and without a
+  // mouse hook (Windows) nothing moves them to her; every couple of seconds she also checks whether
+  // she may follow the pointer to another screen, and whether the hook is still there.
   let seen = null;
+  let seenAt = 0;
   let rearmedAt = -Infinity;
   let follow = null; // (pointer) => she may follow it to another screen (below)
   setInterval(async () => {
     const at = await host.cursor().catch(() => null);
-    const before = seen;
-    seen = at;
-    follow?.(at);
     if (!at?.inside) return;
     const now = performance.now();
-    // the pointer is on her and she isn't clickable (its moves stopped reaching her): she is now
-    if (!interactive && now - lastMove > WATCH_MS) {
-      mouse = { x: at.x, y: at.y };
-      refreshHit();
-    }
-    if (!before?.inside || (at.x === before.x && at.y === before.y)) return;
+    mouse = { x: at.x, y: at.y };
+    refreshHit(); // open/close the click-through area as the pointer moves over her
+    if (now - seenAt < WATCH_MS) return;
+    const before = seen;
+    seen = at;
+    seenAt = now;
+    follow?.(at);
+    if (!config.mouseHook || !before?.inside || (at.x === before.x && at.y === before.y)) return;
     if (now - lastMove < WATCH_MS * 1.5 || now - rearmedAt < 20000) return;
     rearmedAt = now;
     host.rearm();
-  }, WATCH_MS);
-  window.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) host.openMenu();
+  }, POINTER_MS);
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+  // her menu opens from the right-button press, not from the browser's contextmenu event (which can
+  // be dropped): this only fires while the pointer is on her, her panel or her chip.
+  window.addEventListener('mousedown', (e) => {
+    if (e.button === 2) host.openMenu(e.clientX, e.clientY);
   });
   window.addEventListener('click', (e) => {
     if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) comeOut();
@@ -215,7 +237,6 @@ async function boot() {
   };
   panel.onChar = (kind) => voice.play('blip', { mood: kind });
   panel.onTalk = (talking) => talking && capri.perform('talk');
-  capri.onMenu = () => host.openMenu();
 
   // Her guide (guide.js): her welcome on first launch, and "How does it work?" in her menu,
   // where she takes you to things and points at them.
@@ -501,7 +522,7 @@ async function boot() {
   };
 
   // what's in here, for --dev scripts (debug route `eval`)
-  window.dev = { capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, screens: () => screens };
+  window.dev = { capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, screens: () => screens, hit: () => ({ interactive, mouse }) };
 
   host.onClaudeEvent((evt) => brain.handle(evt));
   host.onWindows((data) => {
@@ -629,6 +650,9 @@ async function boot() {
   host.onCommand(async (cmd) => {
     const t = brain.t;
     switch (cmd.name) {
+      case 'menu':
+        menu.show(cmd.items, cmd.x, cmd.y);
+        return;
       case 'teleport':
         capri.teleport(capri.spot('random'));
         break;

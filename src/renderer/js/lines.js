@@ -1766,7 +1766,7 @@ export const LINES = {
 
 // The coding assistants she can watch besides Claude Code: the same lines with their name, their
 // hooks file, and what to do once her hooks are in.
-export const ASSISTANT_NAMES = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity' };
+export const ASSISTANT_NAMES = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity', opencode: 'OpenCode' };
 const OTHERS = {
   codex: {
     name: 'Codex', file: 'hooks.json', dir: '.codex',
@@ -1801,6 +1801,23 @@ const OTHERS = {
       es: 'Ahora empieza una conversación nueva en Antigravity. En cuanto haga algo, te aviso.',
       pt: 'Agora comece uma conversa nova no Antigravity. Assim que ele fizer algo, eu te aviso.',
       ru: 'Теперь начни новый разговор в Antigravity. Как только он что-то сделает, я скажу.',
+    },
+  },
+  opencode: {
+    name: 'OpenCode', file: 'opencode.json', dir: '.config/opencode',
+    ask: {
+      en: 'Want me to plug into OpenCode? One click, then restart it (or /reload).',
+      fr: 'Tu veux que je me branche sur OpenCode ? Un clic, puis relance-le (ou /reload).',
+      es: '¿Quieres que me conecte a OpenCode? Un clic, y luego reinícialo (o /reload).',
+      pt: 'Quer que eu me conecte ao OpenCode? Um clique, depois reinicie (ou /reload).',
+      ru: 'Подключиться к OpenCode? Один клик, потом перезапусти его (или /reload).',
+    },
+    after: {
+      en: 'Now restart OpenCode (or run /reload). As soon as it does something, I’ll tell you.',
+      fr: 'Maintenant relance OpenCode (ou lance /reload). Dès qu’il fait quelque chose, je te le dis.',
+      es: 'Ahora reinicia OpenCode (o ejecuta /reload). En cuanto haga algo, te aviso.',
+      pt: 'Agora reinicie o OpenCode (ou rode /reload). Assim que ele fizer algo, eu te aviso.',
+      ru: 'Теперь перезапусти OpenCode (или выполни /reload). Как только он что-то сделает, я скажу.',
     },
   },
 };

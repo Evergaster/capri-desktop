@@ -3,7 +3,7 @@
 # Capri
 
 Capri, the *Project Capricorn* construct from Cyberpunk: Edgerunners season 2, lives on your desktop
-and tells you what your coding AI is up to: **Claude Code**, **Codex** or **Antigravity**. She teleports,
+and tells you what your coding AI is up to: **Claude Code**, **Codex**, **Antigravity** or **OpenCode**. She teleports,
 glitches, comments on every action, comes to find you when it needs your permission, and loses it when the job is done.
 
 ![Capri telling you Claude is done](docs/done.png)
@@ -295,9 +295,12 @@ npm install
 npm start
 ```
 
-Keep that terminal open while she runs. Not tested on macOS or Linux yet: she should start, but the window tricks
-(sitting on your windows, possessing them, showing Claude's answer when you're elsewhere) are Windows-only, and on Linux
-the transparent overlay works best on X11 (Wayland can struggle with click-through windows).
+Keep that terminal open while she runs. On Linux, a Wayland session lets no window choose its place or what it sits on,
+so she starts again through XWayland when the session has one: the whole work area, above the other windows, and tiling
+window managers leave her be (she is an X11 window that never takes focus, so nothing tiles her). `CAPRI_OZONE=wayland`
+keeps the native backend; without XWayland she still draws, but can't be clicked. The window tricks (sitting on your
+windows, possessing them, showing Claude's answer when you're elsewhere) are Windows-only, and her chat can't be typed
+into on Linux (her window never takes keyboard focus).
 
 ### Hook her up to Claude Code by hand
 
@@ -312,19 +315,21 @@ Restart your Claude Code sessions afterwards. To remove it: `npm run hooks:unins
 
 The hooks run `async`: they never slow Claude down, and when Capri isn't running they do nothing.
 
-### Codex or Antigravity instead of Claude Code
+### Codex, Antigravity or OpenCode instead of Claude Code
 
-Right-click her › **Watch** › **Codex** or **Antigravity**. She says hi and offers to plug herself in, like she does
-for Claude Code. Then:
+Right-click her › **Watch** › **Codex**, **Antigravity** or **OpenCode**. She says hi and offers to plug herself in, like
+she does for Claude Code. Then:
 
 - **Codex**: restart it and trust her hooks when it asks. They go in `~/.codex/hooks.json`. Her hook for Codex needs
   [Node.js](https://nodejs.org) 20 or newer on your PATH.
 - **Antigravity**: start a new conversation. Her hooks go in `~/.gemini/config/hooks.json`.
+- **OpenCode**: restart it (or run `/reload`). Her plugin goes in `~/.config/opencode/plugins/capri.js`.
 
 She follows one of them at a time, the one picked in her menu, and her lines, her guide and her chat use its name.
-She only watches: when Codex or Antigravity asks for approval, you still answer it there. From the command line:
-`npm run hooks:codex:install` or `npm run hooks:agy:install` (`:uninstall` to remove them), and `npm run test:hooks`
-runs the tests of both adapters. **Watch** › **Nothing, just keep me company**: she stops talking about any of them.
+She only watches: when Codex, Antigravity or OpenCode asks for approval, you still answer it there. From the command
+line: `npm run hooks:codex:install`, `hooks:agy:install` or `hooks:opencode:install` (`:uninstall` to remove them),
+and `npm run test:hooks` runs the tests of both hook adapters. **Watch** › **Nothing, just keep me company**: she stops
+talking about any of them.
 
 ### Try it without Claude
 
@@ -379,7 +384,7 @@ named like this (`.mp3`, `.wav`, `.ogg` or `.m4a`):
 
 - **Mac, Linux?** No installer yet, but you can run her from the source (see above).
 - **Phone, Android?** No, she needs a desktop.
-- **Other assistants?** Claude Code, Codex and Antigravity: her menu › **Watch**. Cursor, Windsurf and Gemini CLI: not yet.
+- **Other assistants?** Claude Code, Codex, Antigravity and OpenCode: her menu › **Watch**. Cursor, Windsurf and Gemini CLI: not yet.
 - **Ollama?** Two ways. Claude Code running on a local model through Ollama (`ollama launch claude`): she sees it like
   any Claude Code, it's just slower, and her ticker counts the seconds while it thinks. And she can chat with you
   through Ollama herself: see "Talk to her".

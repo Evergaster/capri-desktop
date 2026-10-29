@@ -106,7 +106,6 @@ export class Capri {
     this.onMove = null;     // her head moved on screen
     this.onTeleport = null; // ('start' | 'end')
     this.onClick = null;
-    this.onMenu = null;   // right-click on her
     this.onGaze = null;
     this.onMode = null;   // (mode, previous)
     this.onStow = null;   // she's in her biochip
@@ -288,12 +287,30 @@ export class Capri {
       const c = lerp(1, 0.3, this.p.sit);
       sy = sy <= SPRITE.hip + THIGH * c ? SPRITE.hip + (sy - SPRITE.hip) / c : sy + THIGH * (1 - c);
     }
-    for (const [dx, dy] of [[0, 0], [4, 0], [-4, 0], [0, 4], [0, -4]]) {
+    for (const [dx, dy] of [[0, 0], [12, 0], [-12, 0], [0, 12], [0, -12], [8, 8], [-8, 8], [8, -8], [-8, -8]]) {
       const px = Math.round(sx + dx), py = Math.round(sy + dy);
       if (px < 0 || py < 0 || px >= SPRITE.width || py >= SPRITE.height) continue;
       if (this.alphaMap[(py * SPRITE.width + px) * 4 + 3] > 40) return true;
     }
-    return false;
+    // Between the legs, under the mane or in a gap of it: still her. At rest only: turning moves
+    // the silhouette away from this hull.
+    if (!this.turn && this.inHull(sx, sy)) return true;
+    // At her usual size the silhouette is small and hard to grab: a click near her counts too.
+    return Math.abs(x - this.pos.x) <= Math.max(46 * this.scale, 30)
+      && y <= this.pos.y + 12 && y >= this.pos.y - Math.max(230 * this.scale, 150);
+  }
+
+  // Is a point of the sprite inside her outline at rest (the hull around her middle)?
+  inHull(x, y) {
+    const px = x - MID.x, py = y - MID.y;
+    let inside = false;
+    const pts = this.hull;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const [xi, yi] = pts[i];
+      const [xj, yj] = pts[j];
+      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
   }
 
   faceCenter() {
@@ -1725,8 +1742,7 @@ export class Capri {
   bindPointer() {
     let down = null;
     this.canvas.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      if (this.hit(e.clientX, e.clientY)) this.onMenu?.(); // right-click: her menu
+      e.preventDefault(); // the menu itself opens from the right-button press, in app.js
     });
     this.canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !this.hit(e.clientX, e.clientY)) return;

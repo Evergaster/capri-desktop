@@ -311,10 +311,13 @@ npm install
 npm start
 ```
 
-Garde ce terminal ouvert tant qu'elle tourne. Pas encore testé sur macOS ni Linux : elle devrait démarrer, mais les tours
-avec les fenêtres (s'asseoir dessus, les posséder, t'afficher la réponse de Claude quand tu es ailleurs) ne marchent que
-sous Windows, et sous Linux le calque transparent marche mieux sous X11 (Wayland a du mal avec les fenêtres qui laissent
-passer les clics).
+Garde ce terminal ouvert tant qu'elle tourne. Sous Linux, une session Wayland ne laisse pas une fenêtre choisir sa place
+ni ce qui passe devant : elle se relance donc par XWayland quand la session en a un (tout l'espace de travail, au-dessus
+des autres fenêtres, et les gestionnaires de fenêtres en mosaïque la laissent tranquille : c'est une fenêtre X11 qui ne
+prend jamais le focus). `CAPRI_OZONE=wayland` garde le backend natif ; sans XWayland elle s'affiche encore, mais ne se
+clique plus. Les tours avec les fenêtres (s'asseoir dessus, les posséder, t'afficher la réponse de Claude quand tu es
+ailleurs) ne marchent que sous Windows, et sous Linux on ne peut pas taper dans son chat (sa fenêtre ne prend jamais le
+focus clavier).
 
 ### La brancher sur Claude Code à la main
 
@@ -329,20 +332,21 @@ Relance tes sessions Claude Code ensuite. Pour retirer : `npm run hooks:uninstal
 
 Les hooks sont lancés en `async` : ils ne ralentissent jamais Claude, et si Capri n'est pas lancée ils ne font rien.
 
-### Codex ou Antigravity à la place de Claude Code
+### Codex, Antigravity ou OpenCode à la place de Claude Code
 
-Clic droit sur elle › **Surveiller** › **Codex** ou **Antigravity**. Elle te salue et propose de se brancher, comme
-pour Claude Code. Ensuite :
+Clic droit sur elle › **Surveiller** › **Codex**, **Antigravity** ou **OpenCode**. Elle te salue et propose de se
+brancher, comme pour Claude Code. Ensuite :
 
 - **Codex** : relance-le et autorise ses hooks quand il te le demande. Ils vont dans `~/.codex/hooks.json`. Son hook
   pour Codex a besoin de [Node.js](https://nodejs.org) 20 ou plus dans ton PATH.
 - **Antigravity** : lance une nouvelle conversation. Ses hooks vont dans `~/.gemini/config/hooks.json`.
+- **OpenCode** : relance-le (ou lance `/reload`). Son plugin va dans `~/.config/opencode/plugins/capri.js`.
 
 Elle en suit un seul à la fois, celui choisi dans son menu, et ses répliques, son guide et son chat prennent son nom.
-Elle ne fait que regarder : quand Codex ou Antigravity demande une autorisation, c'est toujours là-bas que tu réponds.
-En ligne de commande : `npm run hooks:codex:install` ou `npm run hooks:agy:install` (`:uninstall` pour les retirer),
-et `npm run test:hooks` lance les tests des deux adaptateurs. **Surveiller** › **Rien, juste me tenir compagnie** :
-elle ne parle plus d'aucun.
+Elle ne fait que regarder : quand Codex, Antigravity ou OpenCode demande une autorisation, c'est toujours là-bas que tu
+réponds. En ligne de commande : `npm run hooks:codex:install`, `hooks:agy:install` ou `hooks:opencode:install`
+(`:uninstall` pour les retirer), et `npm run test:hooks` lance les tests des deux adaptateurs. **Surveiller** ›
+**Rien, juste me tenir compagnie** : elle ne parle plus d'aucun.
 
 ### Tester sans Claude
 
