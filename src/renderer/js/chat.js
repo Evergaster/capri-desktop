@@ -188,7 +188,7 @@ export class Chat {
     }
     capri.wake();
     const status = await host.chatStatus();
-    if (!status.ok && this.onSetup) {
+    if (!status.ok && this.onSetup && status.provider !== 'opencode') {
       this.onSetup(status); // nothing to talk with yet: she sets it up with you, with buttons (setup.js)
       return;
     }

@@ -92,12 +92,14 @@ export class Setup {
         { id: 'local', label: t.local, primary: true },
         { id: 'online', label: t.online },
         { id: 'key', label: t.key },
+        { id: 'opencode', label: t.opencode },
         { id: 'later', label: t.later },
       ],
     });
     if (id === 'local') return this.ollama();
     if (id === 'online') return this.use('pollinations');
     if (id === 'key') return this.pickKeyed();
+    if (id === 'opencode') return this.use('opencode');
     return false;
   }
 

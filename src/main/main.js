@@ -34,6 +34,12 @@ const SOUND_EXT = /\.(mp3|wav|ogg|m4a)$/i;
 // Linux ignores the option, and passing it can leave the input shape wrong.
 const fwd = () => (process.platform === 'linux' ? undefined : { forward: true });
 
+// Linux (XWayland): a full-screen click-through window never sees the pointer, and
+// screen.getCursorScreenPoint() freezes with it, so her hit zone could never open. There the
+// window is a small viewport that follows her, kept open all the time; the renderer says where.
+const FOLLOW = process.platform === 'linux';
+const FOLLOW_PAD = 28; // room around her body, so a fast move doesn't clip her before we catch up
+
 const OLLAMA_SITE = 'https://ollama.com';
 
 protocol.registerSchemesAsPrivileged([
@@ -126,7 +132,7 @@ function moveOverlay(id) {
   config.save({ displayId: id });
   fitOverlay();
   const { area } = overlayArea();
-  overlay.setBounds(area);
+  if (!FOLLOW) overlay.setBounds(area);
   windowWatch?.refresh();
   rebuildTray();
   return area;
@@ -145,8 +151,26 @@ function overlayArea() {
 function fitOverlay() {
   if (!overlay) return;
   const { area, gap } = overlayArea();
-  overlay.setBounds(area);
-  overlay.webContents.send('overlay:resize', { width: area.width, height: area.height, gap });
+  if (FOLLOW) {
+    // a small window, kept inside the new work area; the renderer asks for its spot again
+    const b = overlay.getBounds();
+    const width = Math.min(b.width, area.width);
+    const height = Math.min(b.height, area.height);
+    const x = Math.max(area.x, Math.min(b.x, area.x + area.width - width));
+    const y = Math.max(area.y, Math.min(b.y, area.y + area.height - height));
+    overlay.setBounds({ x, y, width, height });
+    overlay.webContents.send('overlay:resize', { width: area.width, height: area.height, gap, origin: { x: x - area.x, y: y - area.y } });
+  } else {
+    overlay.setBounds(area);
+    overlay.webContents.send('overlay:resize', { width: area.width, height: area.height, gap });
+  }
+}
+
+// Her window in her own coordinates: the work area is the world, the window a viewport on it.
+function overlayFrame() {
+  const { area, gap } = overlayArea();
+  const b = overlay && !overlay.isDestroyed() ? overlay.getBounds() : area;
+  return { width: area.width, height: area.height, gap, origin: { x: b.x - area.x, y: b.y - area.y }, follow: FOLLOW };
 }
 
 // The pointer reaches her click-through window through a mouse hook, and Windows drops a hook that
@@ -154,8 +178,10 @@ function fitOverlay() {
 // clicked anymore. Off then on puts in a new one; her place on top and her size are set again too.
 function rearmOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
-  overlay.setIgnoreMouseEvents(false);
-  overlay.setIgnoreMouseEvents(true, fwd());
+  if (!FOLLOW) {
+    overlay.setIgnoreMouseEvents(false);
+    overlay.setIgnoreMouseEvents(true, fwd());
+  }
   overlay.setAlwaysOnTop(true, 'screen-saver');
   fitOverlay();
   sendCommand('rearmed'); // click-through again: she waits for the pointer to be on her
@@ -174,9 +200,60 @@ function raiseOverlay() {
   }
 }
 
+// Linux: the window her text is typed into. Her own window has to stay unmanaged to sit where she
+// is, and an unmanaged window never gets the keyboard (on Wayland no client may place a window the
+// compositor manages, so the two can't be the same one). This one the compositor places; it's used
+// for every text she asks for: her chat, an API key, your name.
+let barWin = null;
+
+function createBar() {
+  if (barWin && !barWin.isDestroyed()) return barWin;
+  const { area } = overlayArea();
+  const width = 480;
+  const height = 64;
+  barWin = new BrowserWindow({
+    width,
+    height,
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + area.height - height - 96),
+    parent: overlay, // transient: the window managers that tile leave these floating
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload-bar.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  barWin.setAlwaysOnTop(true, 'screen-saver');
+  barWin.loadURL('capri://app/src/renderer/bar.html');
+  barWin.on('closed', () => { barWin = null; });
+  return barWin;
+}
+
 function createOverlay() {
+  const area = overlayArea().area;
+  // Linux starts small around her corner; the renderer says exactly where on its first frame.
+  const start = FOLLOW
+    ? {
+      x: Math.max(area.x, area.x + area.width - 360),
+      y: Math.max(area.y, area.y + area.height - 440),
+      width: Math.min(360, area.width),
+      height: Math.min(440, area.height),
+    }
+    : area;
   overlay = new BrowserWindow({
-    ...overlayArea().area,
+    ...start,
     transparent: true,
     backgroundColor: '#00000000',
     frame: false,
@@ -201,9 +278,9 @@ function createOverlay() {
   });
 
   overlay.setAlwaysOnTop(true, 'screen-saver');
-  // On Linux, map with the region OPEN: Xwayland commits the first input shape reliably, but later
-  // toggles can be lost. The renderer closes it as soon as it knows where the pointer is.
-  overlay.setIgnoreMouseEvents(process.platform === 'linux' ? false : true, fwd());
+  // On Linux the region stays OPEN and the window small (see FOLLOW): Xwayland commits the first
+  // input shape reliably, and a click-through window would freeze the pointer reading.
+  overlay.setIgnoreMouseEvents(FOLLOW ? false : true, fwd());
   overlay.loadURL('capri://app/src/renderer/index.html');
   // always shown: put away, she's still there as her biochip in the corner. Sized again first:
   // Windows keeps a new window inside the work area, and resting on the taskbar it covers it too.
@@ -287,7 +364,7 @@ function resolveLang(setting) {
 // What the overlay gets: `lang` is the resolved one, `langSetting` what the user picked.
 function rendererConfig() {
   const { apiKeys, ...cfg } = config.load(); // the keys stay here: the overlay only learns which ones are set
-  return { ...cfg, keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap, mouseHook: process.platform === 'win32', regionOpen: process.platform === 'linux' };
+  return { ...cfg, keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap, mouseHook: process.platform === 'win32', followWindow: FOLLOW, frame: overlayFrame() };
 }
 
 function updateConfig(patch) {
@@ -386,7 +463,7 @@ function rebuildTray() {
         { label: t.aiSetup, click: () => sendCommand('setupChat') },
         { type: 'separator' },
         ...Object.entries(llm.PROVIDERS).map(([provider, p]) => ({
-          label: p.label, type: 'radio', checked: cfg.provider === provider, click: () => pickProvider(provider),
+          label: t.providers?.[provider] || p.label, type: 'radio', checked: cfg.provider === provider, click: () => pickProvider(provider),
         })),
         { type: 'separator' },
         ...(chatModels?.length
@@ -701,38 +778,66 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.on('overlay:interactive', (_e, on) => {
+    if (FOLLOW) return; // the small window stays open; see FOLLOW
     if (DEV) console.log('[capri] interactive', on);
     overlay?.setIgnoreMouseEvents(!on, fwd());
-    // Xwayland only applies a changed input shape on a surface commit, and it doesn't commit on a
-    // shape change alone: remap the window to force one.
-    if (process.platform === 'linux' && overlay && overlay.isVisible()) {
-      overlay.hide();
-      overlay.showInactive();
-    }
   });
+  // Linux: the bar her text is typed into (see createBar). `opts`: what to ask for, in her language.
+  ipcMain.on('bar:open', (_e, opts) => {
+    if (!FOLLOW) return;
+    const win = createBar();
+    const show = () => {
+      win.webContents.send('bar:labels', opts || {});
+      win.show();
+      win.focus();
+    };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', show);
+    else show();
+  });
+  ipcMain.on('bar:close', () => {
+    if (barWin && !barWin.isDestroyed()) barWin.hide();
+  });
+  ipcMain.on('bar:submit', (_e, text) => sendCommand('chatText', { text: String(text || '') }));
+  ipcMain.on('bar:escape', () => sendCommand('chatClose'));
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
+  // Linux: the renderer says where she is (work-area coordinates); the window moves there.
+  ipcMain.on('overlay:follow', (_e, rect) => {
+    if (!FOLLOW || !overlay || !rect) return;
+    const { area } = overlayArea();
+    const cur = overlay.getBounds();
+    const width = Math.min(area.width, Math.max(1, Math.round(rect.w + FOLLOW_PAD * 2)));
+    const height = Math.min(area.height, Math.max(1, Math.round(rect.h + FOLLOW_PAD * 2)));
+    const x = Math.max(area.x, Math.min(Math.round(area.x + rect.x - FOLLOW_PAD), area.x + area.width - width));
+    const y = Math.max(area.y, Math.min(Math.round(area.y + rect.y - FOLLOW_PAD), area.y + area.height - height));
+    if (x === cur.x && y === cur.y && width === cur.width && height === cur.height) return;
+    if (DEV) console.log('[capri] follow', JSON.stringify({ x, y, width, height }), 'area', JSON.stringify(area));
+    overlay.setBounds({ x, y, width, height });
+    overlay.webContents.send('overlay:origin', { x: x - area.x, y: y - area.y });
+  });
   ipcMain.handle('overlay:cursor', () => {
     const p = screen.getCursorScreenPoint();
+    const { area } = overlayArea();
     const b = overlay.getBounds();
     const inside = p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
-    return { x: p.x - b.x, y: p.y - b.y, inside, display: displayAt(p).id };
+    return { x: p.x - area.x, y: p.y - area.y, inside, display: displayAt(p).id };
   });
   // your screens (their bounds), the one she's on, and where her window is
   ipcMain.handle('screens:list', () => {
-    const o = overlay.getBounds();
+    const { area } = overlayArea();
     return {
       current: targetDisplay().id,
-      origin: { x: o.x, y: o.y },
+      origin: { x: area.x, y: area.y },
       list: displays().map(({ id, bounds: b }) => ({ id, x: b.x, y: b.y, w: b.width, h: b.height })),
     };
   });
   ipcMain.handle('screens:move', async (_e, id) => {
     const area = moveOverlay(id);
     if (!area) return null;
-    await new Promise((r) => setTimeout(r, 60));
-    overlay.setBounds(area); // again, once Windows has settled it on its new screen
-    const o = overlay.getBounds();
-    return { origin: { x: o.x, y: o.y }, width: o.width, height: o.height, gap: overlayArea().gap };
+    if (!FOLLOW) {
+      await new Promise((r) => setTimeout(r, 60));
+      overlay.setBounds(area); // again, once Windows has settled it on its new screen
+    }
+    return { origin: { x: area.x, y: area.y }, width: area.width, height: area.height, gap: overlayArea().gap };
   });
   ipcMain.handle('config:get', () => rendererConfig());
   ipcMain.handle('hooks:status', () => activeHooks().status());
@@ -897,6 +1002,10 @@ function registerIpc() {
   // typing to her: the overlay takes the keyboard while the chat is open, and gives it back after
   ipcMain.on('overlay:focus', (_e, on) => {
     if (!overlay) return;
+    // Linux: her window has to stay unmanaged to be placed where she is, and an unmanaged window
+    // never gets the keyboard (Wayland lets no client place a window it manages). The typing is
+    // done in a window of its own (bar:open), so nothing to focus here.
+    if (FOLLOW) return;
     overlay.setFocusable(Boolean(on));
     if (on) overlay.focus();
     else overlay.blur();
@@ -912,7 +1021,7 @@ function registerIpc() {
   // her guide: where her tray icon is (it lives in the taskbar, off the overlay, hence overlay
   // coordinates past its edge), and the corner by the clock in case Windows hid it behind the ^
   ipcMain.handle('guide:tray', () => {
-    const o = overlay.getBounds();
+    const o = overlayArea().area; // her own coordinates: the work area, not the small window
     const d = targetDisplay().bounds;
     const b = tray?.getBounds();
     const icon = b && b.width > 0 ? { x: b.x - o.x, y: b.y - o.y, w: b.width, h: b.height } : null;
@@ -969,7 +1078,7 @@ async function debugHandler(route, body) {
     testWins.get(id)?.destroy();
     testWins.delete(id);
     if (body.open) {
-      const b = overlay.getBounds();
+      const b = overlayArea().area;
       const win = new BrowserWindow({
         x: b.x + (body.x ?? 300), y: b.y + (body.y ?? 380), width: body.w ?? 720, height: body.h ?? 380,
         show: false, alwaysOnTop: true, title: `Capri test window ${id}`, backgroundColor: '#1b1726',

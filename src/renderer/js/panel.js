@@ -50,6 +50,7 @@ export class Panel {
     this.decodeTimer = null;
     this.anchor = { x: 0, y: 0, side: 1 };
     this.view = { w: innerWidth, h: innerHeight };
+    this.origin = { x: 0, y: 0 }; // where her window sits in her world (app.js keeps it current)
     this.onChar = null;    // (mood) => void, for the voice blips
     this.onTalk = null;    // (talking: boolean) => void
     this.suspended = false;
@@ -57,6 +58,9 @@ export class Panel {
     this.tickerShownAt = 0;
     this.tickerTimer = null;
     this.missed = null; // a Claude message that came while you were chatting with her, shown after
+    this.externalInput = false; // Linux: the text is typed in a window of its own (see main.js)
+    this.onLayout = null; // () => void, the panel changed size: her window has to catch up now
+    this.onInput = null; // (what: {placeholder, send, secret, disabled} | null) => void, that window
 
     // talking to her (chat.js): a line to type in, under her answer
     this.chatForm = panel.querySelector('.panel__chat');
@@ -67,10 +71,7 @@ export class Panel {
     this.chatForm.addEventListener('click', (e) => e.stopPropagation());
     this.chatForm.addEventListener('submit', (e) => {
       e.preventDefault();
-      const text = this.chatInput.value.trim();
-      if (!text || this.chatInput.disabled) return;
-      this.chatInput.value = '';
-      this.current?.onSend?.(text);
+      this.submitChat(this.chatInput.value);
     });
     this.chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.hide();
@@ -153,6 +154,7 @@ export class Panel {
     this.replayEnter();
     this.place();
     this.decode(msg.line || '', msg.kind);
+    this.onLayout?.(); // before it's painted: growing the window a tick later shows it clipped first
 
     if (msg.hold) this.hideTimer = setTimeout(() => this.hide(), msg.hold);
     return true;
@@ -292,7 +294,27 @@ export class Panel {
       tag.textContent = chat.noteTag || '';
       this.note.replaceChildren(...(chat.noteTag ? [tag, ' '] : []), chat.note);
     }
-    requestAnimationFrame(() => this.chatInput.focus());
+    this.notifyInput(chat);
+    // Linux: its line lives in that window, so this one leaves the room empty
+    this.el.classList.toggle('is-typing-elsewhere', Boolean(chat) && this.externalInput);
+    if (!this.externalInput) requestAnimationFrame(() => this.chatInput.focus());
+  }
+
+  // What you typed, sent to the chat or the prompt on screen. True if it went.
+  submitChat(text) {
+    const said = String(text || '').trim();
+    if (!said || this.chatInput.disabled || !this.current?.chat) return false;
+    this.chatInput.value = '';
+    this.current.onSend?.(said);
+    return true;
+  }
+
+  // Linux: tell the window that takes the keyboard what to ask for, or to go (null).
+  notifyInput(chat = this.current?.chat) {
+    if (!this.externalInput) return;
+    this.onInput?.(chat
+      ? { placeholder: chat.placeholder, send: chat.send, secret: chat.secret, disabled: this.chatInput.disabled }
+      : null);
   }
 
   // A chat turn: what you said goes up top, her answer starts coming in under it (stream), without
@@ -370,7 +392,9 @@ export class Panel {
   setChatBusy(busy) {
     this.chatInput.disabled = busy;
     this.chatSend.disabled = busy;
-    if (!busy && this.current?.chat) this.chatInput.focus();
+    this.notifyInput();
+    if (busy || this.externalInput || !this.current?.chat) return;
+    this.chatInput.focus();
   }
 
   // A button of the message on screen says something else now ("Copied").
@@ -387,6 +411,7 @@ export class Panel {
     await frame();
     const r = this.el.getBoundingClientRect();
     const pad = 18;
+    // window coordinates for the capture; the plate goes in her world (the stage is offset by it)
     const rect = {
       x: Math.max(0, Math.floor(r.left - pad)),
       y: Math.max(0, Math.floor(r.top - pad)),
@@ -395,8 +420,8 @@ export class Panel {
     };
     const plate = document.createElement('div');
     plate.className = 'snap-plate';
-    Object.assign(plate.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-    document.body.append(plate);
+    Object.assign(plate.style, { left: `${rect.x + this.origin.x}px`, top: `${rect.y + this.origin.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+    document.getElementById('stage').append(plate);
     await frame();
     await frame();
     try {
@@ -429,6 +454,7 @@ export class Panel {
   }
 
   hide() {
+    this.onInput?.(null);
     clearTimeout(this.hideTimer);
     clearInterval(this.decodeTimer);
     this.stopStream();
@@ -579,6 +605,12 @@ export class Panel {
 
   rect() {
     if (this.el.hidden || this.suspended) return null;
-    return this.el.getBoundingClientRect();
+    // in her world, not in the window: on Linux the window is only a viewport on it
+    const r = this.el.getBoundingClientRect();
+    return {
+      left: r.left + this.origin.x, right: r.right + this.origin.x,
+      top: r.top + this.origin.y, bottom: r.bottom + this.origin.y,
+      x: r.x + this.origin.x, y: r.y + this.origin.y, width: r.width, height: r.height,
+    };
   }
 }

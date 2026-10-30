@@ -220,6 +220,15 @@ function opencodeVersion() {
   });
 }
 
+// OpenCode's errors carry the reason in `error.message`, or nested in `error.data.message`
+// (a provider refusing the request, a model it won't serve): her panel says it as it is.
+function opencodeReason(err) {
+  if (!err) return 'OpenCode failed';
+  const data = err.data && typeof err.data === 'object' ? err.data : {};
+  const why = data.message || err.message || data.responseBody || '';
+  return [err.type, String(why).trim()].filter(Boolean).join(': ') || 'OpenCode failed';
+}
+
 function opencodeChat(cfg, text, persona, onDelta, signal) {
   const first = !opencodeSession;
   const prompt = first && persona ? `${persona}\n\n${text}` : text;
@@ -245,7 +254,7 @@ function opencodeChat(cfg, text, persona, onDelta, signal) {
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg.sessionID) opencodeSession = msg.sessionID;
-        if (msg.type === 'error') { errors = msg.error?.message || 'OpenCode failed'; return; }
+        if (msg.type === 'error') { errors = opencodeReason(msg.error); return; }
         const part = msg.part;
         const piece = part?.type === 'text' ? part.text : typeof msg.text === 'string' ? msg.text : typeof msg.delta === 'string' ? msg.delta : '';
         if (piece) {

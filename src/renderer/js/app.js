@@ -56,6 +56,20 @@ async function boot() {
     document.fonts.load('400 11px "JetBrains Mono"'),
   ]);
   document.documentElement.lang = config.lang;
+  // Her world is the whole work area. On Linux the window is only a small viewport that follows
+  // her (main.js FOLLOW): `origin` is where it sits in her world, `view` the world's size.
+  const frame = config.frame || { width: innerWidth, height: innerHeight, gap: config.floorGap ?? 0, origin: { x: 0, y: 0 }, follow: false };
+  const followWindow = Boolean(frame.follow);
+  const view = { w: frame.width, h: frame.height };
+  const origin = { x: frame.origin?.x || 0, y: frame.origin?.y || 0 };
+  const stage = document.getElementById('stage');
+  const placeStage = () => {
+    stage.style.width = `${view.w}px`;
+    stage.style.height = `${view.h}px`;
+    stage.style.transform = `translate3d(${-origin.x}px, ${-origin.y}px, 0)`;
+  };
+  placeStage();
+  const at = (e) => ({ x: e.clientX + origin.x, y: e.clientY + origin.y });
   // her animations: like Windows, full or reduced (her menu)
   const applyMotion = (setting) => {
     reducedMotion.setting = setting || 'auto';
@@ -68,12 +82,12 @@ async function boot() {
     cutins: Object.fromEntries(CUTINS.map((name, i) => [name, cutins[i]])),
     intro,
   });
-  fx.resize(innerWidth, innerHeight);
+  fx.resize(view.w, view.h);
   // how far the top of the taskbar is from the bottom of her window: she covers it too while she
   // rests on it (the floor she stands on stays its top)
-  let floorGap = config.floorGap ?? 0;
+  let floorGap = frame.gap ?? config.floorGap ?? 0;
   const chip = new Chip(document.getElementById('chip'));
-  chip.place(innerWidth, innerHeight - floorGap);
+  chip.place(view.w, view.h - floorGap);
   const mask = new Mask(document.getElementById('mask'));
 
   const voice = new Voice();
@@ -85,6 +99,12 @@ async function boot() {
     ticker: document.getElementById('ticker'),
     labels: linesFor(config.lang, config.assistant),
   });
+  panel.view = view;
+  panel.origin = origin;
+  panel.externalInput = followWindow; // Linux: the text is typed in a window of its own (main.js)
+  panel.onInput = (what) => (what ? host.openBar(what) : host.closeBar());
+  menu.view = view;
+  menu.origin = origin;
 
   const capri = new Capri({
     root: document.getElementById('capri'),
@@ -96,17 +116,24 @@ async function boot() {
   capri.wander = config.wander;
   capri.possessWindows = config.possess;
   capri.restOn = config.rest || 'corner';
-  capri.setView(innerWidth, innerHeight, innerHeight - floorGap);
+  capri.origin = origin;
+  capri.pos = { x: view.w - 200, y: view.h - 6 }; // her corner of her world, not of the window
+  capri.setView(view.w, view.h, view.h - floorGap);
   capri.setScale(config.scale);
 
   const mission = new Mission();
   const brain = new Brain({ capri, panel, voice, host, mission, lang: config.lang, assistant: config.assistant });
 
-  // Click-through everywhere except on her body, the panel and her biochip.
-  let interactive = Boolean(config.regionOpen); // Linux maps with the region open
+  // Click-through everywhere except on her body, the panel and her biochip. On Linux the window is
+  // small and always open (see main.js FOLLOW), so there is nothing to toggle.
+  let interactive = followWindow;
   let mouse = null;
   let closeTimer = 0;
   const setInteractive = (on) => {
+    if (followWindow) {
+      interactive = on;
+      return;
+    }
     if (on) {
       clearTimeout(closeTimer);
       closeTimer = 0;
@@ -162,7 +189,7 @@ async function boot() {
     const now = performance.now();
     if (now - lastMove > AWAY_MS) onBack?.(now - lastMove);
     lastMove = now;
-    mouse = { x: e.clientX, y: e.clientY };
+    mouse = at(e);
     refreshHit();
     hoverChip();
   });
@@ -174,22 +201,24 @@ async function boot() {
   // Where the pointer really is: over her, the window has to let the clicks in, and without a
   // mouse hook (Windows) nothing moves them to her; every couple of seconds she also checks whether
   // she may follow the pointer to another screen, and whether the hook is still there.
+  // On Linux the window is small and always open: its own mouse events are enough, and
+  // getCursorScreenPoint() freezes when the pointer leaves it (main.js FOLLOW).
   let seen = null;
   let seenAt = 0;
   let rearmedAt = -Infinity;
   let follow = null; // (pointer) => she may follow it to another screen (below)
-  setInterval(async () => {
-    const at = await host.cursor().catch(() => null);
-    if (!at?.inside) return;
+  if (!followWindow) setInterval(async () => {
+    const cursor = await host.cursor().catch(() => null);
+    if (!cursor?.inside) return;
     const now = performance.now();
-    mouse = { x: at.x, y: at.y };
+    mouse = { x: cursor.x, y: cursor.y };
     refreshHit(); // open/close the click-through area as the pointer moves over her
     if (now - seenAt < WATCH_MS) return;
     const before = seen;
-    seen = at;
+    seen = cursor;
     seenAt = now;
-    follow?.(at);
-    if (!config.mouseHook || !before?.inside || (at.x === before.x && at.y === before.y)) return;
+    follow?.(cursor);
+    if (!config.mouseHook || !before?.inside || (cursor.x === before.x && cursor.y === before.y)) return;
     if (now - lastMove < WATCH_MS * 1.5 || now - rearmedAt < 20000) return;
     rearmedAt = now;
     host.rearm();
@@ -198,10 +227,10 @@ async function boot() {
   // her menu opens from the right-button press, not from the browser's contextmenu event (which can
   // be dropped): this only fires while the pointer is on her, her panel or her chip.
   window.addEventListener('mousedown', (e) => {
-    if (e.button === 2) host.openMenu(e.clientX, e.clientY);
+    if (e.button === 2) host.openMenu(at(e).x, at(e).y);
   });
   window.addEventListener('click', (e) => {
-    if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) comeOut();
+    if (chip.visible && chip.contains(at(e).x, at(e).y, 0)) comeOut();
   });
 
   // wiring
@@ -536,8 +565,15 @@ async function boot() {
 
   // her window resized, or moved to another screen (whose pixels may be another size)
   let dpr = window.devicePixelRatio;
-  const applySize = ({ width, height, gap = 0 }) => {
+  const applySize = ({ width, height, gap = 0, origin: o }) => {
     floorGap = gap;
+    view.w = width;
+    view.h = height;
+    if (o) {
+      origin.x = o.x;
+      origin.y = o.y;
+    }
+    placeStage();
     fx.resize(width, height);
     chip.place(width, height - gap);
     capri.setView(width, height, height - gap);
@@ -547,10 +583,84 @@ async function boot() {
     }
   };
   host.onResize(applySize);
+  // Linux: the window moved (it follows her); her world did not
+  host.onOrigin((o) => {
+    if (!o) return;
+    const dx = o.x - origin.x, dy = o.y - origin.y;
+    origin.x = o.x;
+    origin.y = o.y;
+    placeStage();
+    capri.windowMoved(dx, dy);
+  });
+
+  // Linux: tell main how much of her world the window has to show. Around her body, plus the panel,
+  // the menu, her biochip or her mask when they are out; the whole work area while she is off the
+  // leash (busy, thrown, dragged, or up at her satellite), where a small window would clip her.
+  const box = (el) => {
+    if (!el || el.hidden) return null;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: r.left + origin.x, y: r.top + origin.y, w: r.width, h: r.height };
+  };
+  let lastFollow = null;
+  let holdSize = 0; // a box that just shrank is kept a moment (see below)
+  const STEP = 32; // her window resizes in steps: X11 flashes on every size change, and she floats
+  const sendFollow = () => {
+    if (!followWindow) return;
+    let rect;
+    if (capri.busy || capri.dragging || capri.sky || ['held', 'fly'].includes(capri.stance)) {
+      rect = { x: 0, y: 0, w: view.w, h: view.h };
+    } else {
+      // the menu, and the room a submenu needs on the side it opens (measured ones too, for the
+      // odd wide list): it never resizes her window just because you hover a row
+      let menuBoxes = [];
+      if (menu.open) {
+        const m = box(menu.root);
+        if (m) {
+          const toRight = m.x + m.w / 2 < view.w / 2;
+          menuBoxes = [m, {
+            x: toRight ? m.x + m.w : Math.max(0, m.x - 380),
+            y: m.y, w: 380, h: m.h,
+          }, ...[...menu.root.querySelectorAll('.menu__list')].map(box).filter(Boolean)];
+        }
+      }
+      const boxes = [capri.hidden ? null : box(capri.canvas), box(panel.el), box(panel.tickerEl),
+        chip.visible ? box(chip.canvas) : null, mask.visible ? box(mask.canvas) : null, ...menuBoxes].filter(Boolean);
+      if (!boxes.length) return;
+      const x1 = Math.max(0, Math.min(...boxes.map((b) => b.x)));
+      const y1 = Math.max(0, Math.min(...boxes.map((b) => b.y)));
+      const x2 = Math.min(view.w, Math.max(...boxes.map((b) => b.x + b.w)));
+      const y2 = Math.min(view.h, Math.max(...boxes.map((b) => b.y + b.h)));
+      rect = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    }
+    const q = {
+      x: Math.round(rect.x / 8) * 8,
+      y: Math.round(rect.y / 8) * 8,
+      w: Math.ceil(rect.w / STEP) * STEP,
+      h: Math.ceil(rect.h / STEP) * STEP,
+    };
+    // it grows at once, but only shrinks once it's been smaller for a moment: otherwise the panel
+    // and the menu (which change size as you use them) would resize the window over and over
+    if (lastFollow && (q.w < lastFollow.w || q.h < lastFollow.h)) {
+      if (performance.now() < holdSize) {
+        q.w = Math.max(q.w, lastFollow.w);
+        q.h = Math.max(q.h, lastFollow.h);
+      } else holdSize = 0; // smaller for a moment now: let it come in
+    } else {
+      holdSize = performance.now() + 900;
+    }
+    if (lastFollow && q.x === lastFollow.x && q.y === lastFollow.y && q.w === lastFollow.w && q.h === lastFollow.h) return;
+    lastFollow = q;
+    host.follow(q);
+  };
+  panel.onLayout = sendFollow; // a panel or a menu opening: her window catches up at once
+  menu.onLayout = sendFollow;
+  setInterval(sendFollow, 30);
+  sendFollow();
 
   // Your screens. She goes from one to the other through their shared edge (thrown, or jumping
-  // over to follow you), else in her column of light. `screens`: { current, origin (her window's
-  // corner), list: [{ id, x, y, w, h }] }, all in the desktop's coordinates.
+  // over to follow you), else in her column of light. `screens`: { current, origin (the work
+  // area's corner), list: [{ id, x, y, w, h }] }, all in the desktop's coordinates.
   let screens = await host.screens().catch(() => null);
   const refreshScreens = async () => {
     screens = await host.screens().catch(() => screens);
@@ -607,9 +717,13 @@ async function boot() {
     goToScreen(at.display);
   };
   window.addEventListener('resize', () => {
-    fx.resize(innerWidth, innerHeight);
-    chip.place(innerWidth, innerHeight - floorGap);
-    capri.setView(innerWidth, innerHeight, innerHeight - floorGap);
+    if (followWindow) return; // the window resizes as it follows her; the world does not
+    view.w = innerWidth;
+    view.h = innerHeight;
+    placeStage();
+    fx.resize(view.w, view.h);
+    chip.place(view.w, view.h - floorGap);
+    capri.setView(view.w, view.h, view.h - floorGap);
   });
 
   host.onConfig((cfg) => {
@@ -705,6 +819,12 @@ async function boot() {
         setTimeout(() => lose?.restoreContext(), cmd.ms ?? 1500);
         break;
       }
+      case 'chatText': // from the window the text is typed into (Linux)
+        panel.submitChat(cmd.text);
+        return;
+      case 'chatClose': // Escape or the cross there
+        panel.hide();
+        return;
       case 'answer': { // --dev: as if that button of her panel had been clicked (her chat's too)
         const button = document.querySelector(`.panel__action[data-id="${CSS.escape(cmd.id)}"]`);
         if (button) button.click();

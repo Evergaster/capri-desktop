@@ -102,6 +102,8 @@ export class Capri {
     this.uplinkDue = false;
     this.pointing = null; // what she's showing you: { rect, aim, dir, side, reach, label, pointer }
     this.mouse = null; // last pointer position seen
+    this.origin = { x: 0, y: 0 }; // where her window sits in her world (Linux: it follows her)
+    this.settledAt = 0; // until then the pointer events may still be in the window's old place
 
     this.onMove = null;     // her head moved on screen
     this.onTeleport = null; // ('start' | 'end')
@@ -233,6 +235,18 @@ export class Capri {
       this.pos.y = clamp(this.pos.y, SPRITE.height * this.scale, floor - 4);
     }
     this.place();
+  }
+
+  // Her window just jumped (Linux: it grows to the whole work area when she's picked up): for a
+  // frame the pointer events still carry the window's old coordinates, so anything taken from them
+  // now would be off by the jump. A small move is the window following her floating: harmless.
+  windowMoved(dx, dy) {
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    this.settledAt = performance.now() + 60;
+  }
+
+  get settled() {
+    return performance.now() >= this.settledAt;
   }
 
   get upside() {
@@ -1740,12 +1754,15 @@ export class Capri {
   // ---------- pointer ----------
 
   bindPointer() {
+    // pointer events are in window pixels; she lives in the work area's (see this.origin)
+    const point = (e) => ({ x: e.clientX + this.origin.x, y: e.clientY + this.origin.y });
     let down = null;
     this.canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault(); // the menu itself opens from the right-button press, in app.js
     });
     this.canvas.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || !this.hit(e.clientX, e.clientY)) return;
+      const p = point(e);
+      if (e.button !== 0 || !this.hit(p.x, p.y)) return;
       // thrown: you can catch her on the fly, or pick her up off the floor
       const thrown = this.stance === 'fly' || this.stance === 'down';
       if (this.busy && !thrown) return;
@@ -1753,17 +1770,26 @@ export class Capri {
         this.dodge(); // thrown around once too often: not again
         return;
       }
-      down = { x: e.clientX, y: e.clientY, pos: { ...this.pos }, at: this.spritePoint(e.clientX, e.clientY) };
-      this.track = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
+      // pressed while her window was still moving: where that point is only settles in a frame
+      down = { x: p.x, y: p.y, pos: { ...this.pos }, at: this.spritePoint(p.x, p.y), shaky: !this.settled };
+      this.track = [{ x: p.x, y: p.y, t: performance.now() }];
       if (thrown) this.pickUp(down);
     });
     window.addEventListener('mousemove', (e) => {
-      this.mouse = { x: e.clientX, y: e.clientY }; // a window she's in watches it
+      const p = point(e);
+      this.mouse = { x: p.x, y: p.y }; // a window she's in watches it
       if (down) {
+        if (!this.settled) return; // the window just moved under the pointer: not a real step
         const now = performance.now();
-        this.track.push({ x: e.clientX, y: e.clientY, t: now });
+        if (down.shaky) {
+          // that press landed while her window was moving: take the grab from here instead
+          down = { x: p.x, y: p.y, pos: { ...this.pos }, at: this.spritePoint(p.x, p.y), shaky: false };
+          this.track = [{ x: p.x, y: p.y, t: now }];
+          if (this.dragging) this.pickUp(down); // caught in the air: grab her again, by this point
+        }
+        this.track.push({ x: p.x, y: p.y, t: now });
         while (this.track.length > 2 && now - this.track[0].t > 160) this.track.shift();
-        const dx = e.clientX - down.x, dy = e.clientY - down.y;
+        const dx = p.x - down.x, dy = p.y - down.y;
         if (!this.dragging && Math.hypot(dx, dy) > 5 && !this.busy) this.pickUp(down);
         if (this.dragging) {
           this.pos = {
@@ -1775,7 +1801,7 @@ export class Capri {
         }
         return;
       }
-      this.notice(e.clientX, e.clientY);
+      this.notice(p.x, p.y);
     });
     window.addEventListener('mouseup', () => {
       if (!down) return;

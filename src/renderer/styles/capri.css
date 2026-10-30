@@ -67,7 +67,6 @@
   --font-display: 'Chakra Petch', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
 
-  --text-line: clamp(15px, calc(0.45vw + 8.5px), 19px);
   --text-meta: 10px;
   --text-data: 11px;
 
@@ -95,6 +94,17 @@ body {
 
 [hidden] {
   display: none !important;
+}
+
+/* Her world: the whole work area. On Linux the window is only a small viewport on it (main.js
+   FOLLOW), so layout sizes use cqw/cqh against this box, not the window. */
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  container-type: size;
+  will-change: transform;
+  --text-line: clamp(15px, calc(0.45cqw + 8.5px), 19px);
 }
 
 /* ---------- Capri ---------- */
@@ -139,7 +149,7 @@ body {
   left: 0;
   top: 0;
   z-index: 3;
-  width: clamp(290px, 21vw, 380px);
+  width: clamp(290px, 21cqw, 380px);
   color: var(--paper);
   filter: drop-shadow(6px 6px 0 var(--violet));
   will-change: transform;
@@ -339,13 +349,13 @@ html[data-motion='reduced'] .panel__bar {
 
 /* Claude's whole answer, when you weren't on its window to read it: wider panel, scrolls */
 .panel.has-reply {
-  width: clamp(340px, 30vw, 520px);
+  width: clamp(340px, 30cqw, 520px);
 }
 
 .panel__reply {
   margin: 9px 0 0;
   padding: 2px 10px 2px 9px;
-  max-height: min(44vh, 420px);
+  max-height: min(44cqh, 420px);
   overflow-y: auto;
   overscroll-behavior: contain;
   border-left: 2px solid var(--accent);
@@ -464,7 +474,7 @@ html[data-motion='reduced'] .panel__bar {
 .panel[data-kind='report'] { --accent: var(--green); }
 
 .panel.has-report {
-  width: clamp(340px, 26vw, 440px);
+  width: clamp(340px, 26cqw, 440px);
 }
 
 .panel__report {
@@ -507,7 +517,7 @@ html[data-motion='reduced'] .panel__bar {
 .report__big {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(46px, 3.3vw, 62px);
+  font-size: clamp(46px, 3.3cqw, 62px);
   line-height: 0.88;
   letter-spacing: -0.04em;
   color: var(--accent);
@@ -633,7 +643,7 @@ html[data-motion='reduced'] .panel__bar {
 .panel[data-kind='chat'] { --accent: var(--green); }
 
 .panel.is-chat {
-  width: clamp(320px, 24vw, 420px);
+  width: clamp(320px, 24cqw, 420px);
 }
 
 /* your line up top like a prompt, her answer under it */
@@ -660,7 +670,7 @@ html[data-motion='reduced'] .panel__bar {
 }
 
 .panel.is-chat .panel__line {
-  max-height: min(36vh, 320px);
+  max-height: min(36cqh, 320px);
   padding-block: 2px; /* the display face's glyphs reach past its line box: no scrollbar for that */
   overflow-y: auto;
   scrollbar-width: thin;
@@ -874,6 +884,9 @@ html[data-motion='reduced'] .panel[data-kind='alert'] .panel__state {
   z-index: 10;
   font: 400 13px/1.55 "Chakra Petch", system-ui, sans-serif;
   color: var(--paper);
+  overflow-y: auto; /* only bites once a menu is taller than her world (menu.js caps it) */
+  overscroll-behavior: contain;
+  scrollbar-width: none;
 }
 
 .menu__list {
@@ -941,12 +954,93 @@ html[data-motion='reduced'] .panel[data-kind='alert'] .panel__state {
 }
 
 .menu__has-sub > .menu__list {
-  position: absolute;
-  left: 100%;
-  top: -4px;
+  /* fixed, so the menu's own scroll can't cut it off; menu.js puts it beside its row */
+  position: fixed;
+  left: 0;
+  top: 0;
   display: none;
 }
 
 .menu__has-sub:hover > .menu__list {
   display: block;
+}
+
+/* ---------- the line her text is typed into (its own window, Linux) ---------- */
+
+.bar {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--paper);
+}
+
+.bar__form {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  height: 100%;
+  padding: 10px;
+  background: var(--ink);
+  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+  box-shadow: 6px 6px 0 var(--violet);
+}
+
+.bar__input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px 6px;
+  border: 0;
+  border-bottom: 2px solid var(--violet);
+  background: var(--ink-2);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: calc(var(--text-data) + 1px);
+  caret-color: var(--violet);
+  user-select: text;
+  outline: none;
+  clip-path: polygon(7px 0, 100% 0, 100% 100%, 0 100%, 0 7px);
+}
+
+.bar__input::placeholder {
+  color: var(--paper-3);
+}
+
+.bar__input:focus {
+  background: oklch(0.27 0.05 300);
+  border-bottom-color: var(--green);
+}
+
+.bar__send,
+.bar__close {
+  flex: none;
+  border: 0;
+  padding: 0 14px;
+  background: var(--violet);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--text-data);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.bar__send:hover {
+  background: var(--green);
+}
+
+.bar__close {
+  padding: 0 10px;
+  background: var(--ink-2);
+  color: var(--paper-3);
+}
+
+.bar__close:hover {
+  background: var(--red);
+  color: var(--ink);
+}
+
+/* Linux: the line is in a window of its own (see main.js), so this one keeps its room, empty */
+.panel.is-typing-elsewhere .panel__chat {
+  visibility: hidden;
 }
