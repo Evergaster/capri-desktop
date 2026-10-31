@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('host', {
   chatMemory: () => ipcRenderer.invoke('chat:memory'),
   chatRemember: (history) => ipcRenderer.send('chat:remember', history),
   onChatDelta: on('chat:delta'),
+  // her voice (Linux): Fono speaks her answer; the audio comes back from main, never from a URL
+  fonoSpeak: (text) => ipcRenderer.invoke('fono:tts', text),
+  fonoSpeakStop: () => ipcRenderer.send('fono:ttsStop'),
   lookSnap: () => ipcRenderer.invoke('look:snap'),
   lookSay: (request) => ipcRenderer.invoke('look:say', request),
   lookWhere: () => ipcRenderer.invoke('look:where'),

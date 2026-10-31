@@ -67,7 +67,15 @@ export class Panel {
     this.chatInput = panel.querySelector('.panel__input');
     this.chatSend = panel.querySelector('.panel__send');
     this.chatClose = panel.querySelector('.panel__close');
+    this.voiceStop = panel.querySelector('.panel__voice');
+    this.voiceError = panel.querySelector('.panel__voice-error');
+    this.voiceErrorTimer = null;
+    this.onVoiceStop = null; // () => void, "stop the voice" was clicked
     this.note = panel.querySelector('.panel__note');
+    this.voiceStop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onVoiceStop?.();
+    });
     this.chatForm.addEventListener('click', (e) => e.stopPropagation());
     this.chatForm.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -309,11 +317,27 @@ export class Panel {
     return true;
   }
 
+  // Linux: her answer read aloud by Fono (chat.js). The button stops it; the error line, when the
+  // mic or Fono couldn't answer, so a failed recording never looks like nothing happened.
+  setVoiceStop(on, label = '') {
+    this.voiceStop.hidden = !on;
+    if (on) this.voiceStop.textContent = label;
+    this.place();
+  }
+
+  setVoiceError(text) {
+    clearTimeout(this.voiceErrorTimer);
+    this.voiceError.textContent = text || '';
+    this.voiceError.hidden = !text;
+    if (text) this.voiceErrorTimer = setTimeout(() => { this.voiceError.hidden = true; this.place(); }, 9000);
+    this.place();
+  }
+
   // Linux: tell the window that takes the keyboard what to ask for, or to go (null).
   notifyInput(chat = this.current?.chat) {
     if (!this.externalInput) return;
     this.onInput?.(chat
-      ? { placeholder: chat.placeholder, send: chat.send, secret: chat.secret, disabled: this.chatInput.disabled }
+      ? { placeholder: chat.placeholder, send: chat.send, secret: chat.secret, disabled: this.chatInput.disabled, voice: chat.voice }
       : null);
   }
 
@@ -455,6 +479,9 @@ export class Panel {
 
   hide() {
     this.onInput?.(null);
+    this.voiceStop.hidden = true;
+    this.voiceError.hidden = true;
+    clearTimeout(this.voiceErrorTimer);
     clearTimeout(this.hideTimer);
     clearInterval(this.decodeTimer);
     this.stopStream();

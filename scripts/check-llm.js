@@ -23,6 +23,9 @@ http.createServer((req, res) => {
   assert(text && text === streamed, 'pollinations stream');
   console.log('pollinations:', models[0], '->', text.slice(0, 60));
   await assert.rejects(llm.models('openai', cfg), /no API key/);
+  // Fono: its own code when the daemon isn't there, and its URL from config when set
+  await assert.rejects(llm.models('fono', { ...cfg, fonoUrl: 'http://127.0.0.1:1/v1' }), (e) => e.code === 'fono-offline');
+  assert(llm.isLocal('fono', cfg), 'fono is local');
   assert.deepStrictEqual(await llm.models('claude', cfg), ['Claude Code']);
   const persona = { role: 'system', content: 'You are Capri, a playful ghost from Project Capricorn. Keep it to one sentence.' };
   const a = await llm.chat('claude', cfg, { messages: [persona, { role: 'user', content: 'Remember the word "kiwi". Reply only: ok' }] }, () => {}, new AbortController().signal);

@@ -13,6 +13,7 @@ const ollama = require('./ollama');
 
 const PROVIDERS = {
   ollama: { label: 'Ollama (local)', kind: 'ollama', local: true },
+  fono: { label: 'Fono (local :11434)', url: 'http://127.0.0.1:11434/v1', local: true },
   lmstudio: { label: 'LM Studio (local)', url: 'http://127.0.0.1:1234/v1', local: true },
   llamacpp: { label: 'llama.cpp / vLLM (local :8080)', url: 'http://127.0.0.1:8080/v1', local: true },
   pollinations: {
@@ -34,12 +35,15 @@ const CLAUDE_MODES = ['default', 'acceptEdits'];
 
 function endpoint(id, cfg) {
   const p = PROVIDERS[id];
-  const url = (id === 'custom' ? cfg.customUrl : p.url) || '';
+  const url = (id === 'custom' ? cfg.customUrl : id === 'fono' ? cfg.fonoUrl || p.url : p.url) || '';
   const key = cfg.apiKeys?.[id] || (p.env && process.env[p.env]) || '';
   return { ...p, url: url.replace(/\/+$/, ''), key };
 }
 
 const headers = (key) => ({ 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) });
+
+// Fono's local server, from config (empty: 127.0.0.1:11434). Its chat, STT and TTS share one address.
+const fonoUrl = (cfg) => endpoint('fono', cfg).url;
 
 // Why a server said no, in a sentence (Gemini sends its error inside an array), with a code when it's
 // worth another try: 'busy' (too many people on it right now), 'gone' (that model isn't served anymore).
@@ -68,6 +72,13 @@ function geminiModels(names) {
     .sort((a, b) => rank(a) - rank(b) || version(b) - version(a));
 }
 
+// Fono only answers while its daemon runs: a refused or timed-out connection gets its own code, with
+// the fix in the message, so her panel doesn't call it a generic outage. What Fono answers with
+// (context too long, model errors) is passed through as it is.
+const fonoOffline = (cause) => Object.assign(
+  new Error('Fono is not answering on its local server. Start it (run `fono`, or its systemd service) with [server.llm] enabled in ~/.config/fono/config.toml.'),
+  { code: 'fono-offline', cause });
+
 // The provider's models by name; null when it can't be reached (Ollama only), throws with why otherwise.
 async function models(id, cfg) {
   const p = endpoint(id, cfg);
@@ -77,7 +88,12 @@ async function models(id, cfg) {
   // what's missing has a code, so her setup knows what to ask for (setup.js)
   if (!p.url) throw Object.assign(new Error('no address set for this server'), { code: 'nourl' });
   if (p.env && !p.key) throw Object.assign(new Error(`no API key (or ${p.env})`), { code: 'nokey' });
-  const res = await fetch(p.modelsUrl || `${p.url}/models`, { headers: headers(p.key), signal: AbortSignal.timeout(5000) });
+  let res;
+  try {
+    res = await fetch(p.modelsUrl || `${p.url}/models`, { headers: headers(p.key), signal: AbortSignal.timeout(5000) });
+  } catch (err) {
+    throw id === 'fono' ? fonoOffline(err) : err;
+  }
   if (!res.ok) throw await failure(res);
   const body = await res.json();
   const list = Array.isArray(body) ? body : body.data || body.models || [];
@@ -286,6 +302,13 @@ async function chat(id, cfg, { model, messages }, onDelta, signal) {
   // last message go
   if (p.kind === 'claude') return claudeChat(cfg, messages.at(-1).content, messages[0].content, onDelta, signal);
   if (p.kind === 'opencode') return opencodeChat(cfg, messages.at(-1).content, messages[0].content, onDelta, signal);
+  if (id === 'fono') {
+    // a connection that never happened is 'fono-offline'; an HTTP error (SSE or not) is Fono's own
+    return openaiChat(p, { model, messages }, onDelta, signal).catch((err) => {
+      if (!signal.aborted && (err instanceof TypeError || err.name === 'TimeoutError')) throw fonoOffline(err);
+      throw err;
+    });
+  }
   return openaiChat(p, { model, messages }, onDelta, signal);
 }
 
@@ -298,4 +321,4 @@ function isLocal(id, cfg, model) {
   return Boolean(PROVIDERS[id].local);
 }
 
-module.exports = { isLocal, PROVIDERS, CLAUDE_MODES, models, warm, chat, resetClaude, resetOpencode, isChatSession, claudeMemory, restoreClaude };
+module.exports = { isLocal, PROVIDERS, CLAUDE_MODES, models, warm, chat, resetClaude, resetOpencode, isChatSession, claudeMemory, restoreClaude, failure, fonoOffline, fonoUrl };

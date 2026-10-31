@@ -822,6 +822,9 @@ async function boot() {
       case 'chatText': // from the window the text is typed into (Linux)
         panel.submitChat(cmd.text);
         return;
+      case 'voice': // Linux: the mic bar is listening/transcribing, or why it couldn't hear you
+        chat.voice(cmd);
+        return;
       case 'chatClose': // Escape or the cross there
         panel.hide();
         return;

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Tray, Menu, ipcMain, screen, protocol, net, shell, globalShortcut, nativeImage,
-  clipboard, ClipboardItem, dialog, powerMonitor, desktopCapturer,
+  clipboard, ClipboardItem, dialog, powerMonitor, desktopCapturer, session,
 } = require('electron');
 const { randomUUID } = require('node:crypto');
 
@@ -15,6 +15,7 @@ const { TRAY, LANGS } = require('./labels');
 const { createBridge } = require('./bridge');
 const { startWindowWatch } = require('./windows');
 const llm = require('./llm');
+const fono = require('./fono');
 const ollama = require('./ollama');
 const setup = require('./setup');
 const apps = require('./apps');
@@ -60,6 +61,8 @@ let chatErrorCode = null; // 'nokey' or 'nourl': what her setup should ask for
 // Ollama's cloud, as last seen: your account ({ name } or { signin }) and the models free with it
 let cloud = { at: 0, account: null, free: [] };
 const chats = new Map(); // id -> AbortController of an answer being streamed
+let sttAbort = null;     // Fono transcribing her voice, from the bar (Linux)
+let ttsAbort = null;     // Fono synthesizing her answer, once it's written
 
 const userSoundsDir = () => path.join(app.getPath('userData'), 'sounds');
 
@@ -433,6 +436,10 @@ function rebuildTray() {
       label: t.sound,
       submenu: [
         { label: t.mute, type: 'checkbox', checked: cfg.muted, click: () => updateConfig({ muted: !cfg.muted }) },
+        // Linux only: her answers read aloud by Fono's voice (see fono.js)
+        ...(process.platform === 'linux' ? [{
+          label: t.fonoVoice, type: 'checkbox', checked: cfg.fonoSpeak !== false, click: () => updateConfig({ fonoSpeak: cfg.fonoSpeak === false }),
+        }] : []),
         { type: 'separator' },
         {
           label: t.soundsDir,
@@ -752,7 +759,9 @@ async function sayAboutSnap({ id, persona, prompt, history = [] }) {
 async function pickProvider(provider) {
   updateConfig({ provider });
   await refreshModels();
-  if (chatErrorCode) sendCommand('setupKey'); // it needs a key or an address: she asks for it
+  // a key or an address: she asks for it. Not Fono: it is a local server with no key, and what's
+  // missing is its daemon (the panel says how to start it).
+  if (chatErrorCode && provider !== 'fono') sendCommand('setupKey');
 }
 
 // What llm.js gets: the config with its keys opened (they're kept encrypted, setup.js)
@@ -777,6 +786,13 @@ function createTray() {
 }
 
 function registerIpc() {
+  // Linux: the mic lives in the bar (her chat's own window). Only it may ask for the microphone;
+  // every other renderer stays denied, as before.
+  if (process.platform === 'linux') {
+    const allowed = (wc, permission) => permission === 'media' && wc === barWin?.webContents;
+    session.defaultSession.setPermissionCheckHandler(allowed);
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(allowed(wc, permission)));
+  }
   ipcMain.on('overlay:interactive', (_e, on) => {
     if (FOLLOW) return; // the small window stays open; see FOLLOW
     if (DEV) console.log('[capri] interactive', on);
@@ -795,9 +811,15 @@ function registerIpc() {
     else show();
   });
   ipcMain.on('bar:close', () => {
-    if (barWin && !barWin.isDestroyed()) barWin.hide();
+    sttAbort?.abort(); // the bar is going away: no recording or transcription outlives it
+    if (barWin && !barWin.isDestroyed()) {
+      barWin.webContents.send('bar:cancel');
+      barWin.hide();
+    }
   });
   ipcMain.on('bar:submit', (_e, text) => sendCommand('chatText', { text: String(text || '') }));
+  // Linux: what the bar is doing (listening / transcribing / a voice error), for the chat panel
+  ipcMain.on('bar:voice', (_e, payload) => sendCommand('voice', payload || {}));
   ipcMain.on('bar:escape', () => sendCommand('chatClose'));
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
   // Linux: the renderer says where she is (work-area coordinates); the window moves there.
@@ -891,6 +913,47 @@ function registerIpc() {
     }
   });
   ipcMain.on('chat:stop', (_e, id) => chats.get(id)?.abort());
+  // Her voice (Linux): the bar records a WAV, Fono transcribes it. The audio and the URL stay here;
+  // the renderer only records and plays. No key: Fono trusts loopback.
+  ipcMain.handle('fono:stt', async (_e, audio) => {
+    if (process.platform !== 'linux') return { ok: false, code: 'unsupported' };
+    let wav;
+    try { wav = Buffer.from(audio); } catch { return { ok: false, code: 'bad-audio' }; }
+    if (wav.length < 44 || wav.length > 24 * 1024 * 1024) return { ok: false, code: 'bad-audio' };
+    sttAbort?.abort();
+    const abort = new AbortController();
+    sttAbort = abort;
+    const cfg = config.load(true);
+    try {
+      const text = await fono.transcribe(cfg, wav, resolveLang(cfg.lang), abort.signal);
+      return { ok: true, text };
+    } catch (err) {
+      if (abort.signal.aborted) return { ok: false, code: 'stopped' };
+      return { ok: false, code: err.code || null, error: err.message };
+    } finally {
+      if (sttAbort === abort) sttAbort = null;
+    }
+  });
+  ipcMain.on('fono:sttStop', () => sttAbort?.abort());
+  // Her answer in Fono's voice, the voice it picks. One WAV for the whole answer: it doesn't stream TTS.
+  ipcMain.handle('fono:tts', async (_e, text) => {
+    if (process.platform !== 'linux') return { ok: false, code: 'unsupported' };
+    const said = String(text || '').trim().slice(0, 4000);
+    if (!said) return { ok: false, code: 'empty' };
+    ttsAbort?.abort();
+    const abort = new AbortController();
+    ttsAbort = abort;
+    try {
+      const audio = await fono.speak(config.load(true), said, abort.signal);
+      return { ok: true, audio };
+    } catch (err) {
+      if (abort.signal.aborted) return { ok: false, code: 'stopped' };
+      return { ok: false, code: err.code || null, error: err.message };
+    } finally {
+      if (ttsAbort === abort) ttsAbort = null;
+    }
+  });
+  ipcMain.on('fono:ttsStop', () => ttsAbort?.abort());
   // she looks at your screen (look.js): the picture first, then what her AI says about it
   ipcMain.handle('look:snap', async () => {
     try {

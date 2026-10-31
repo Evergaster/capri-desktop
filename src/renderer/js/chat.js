@@ -169,6 +169,9 @@ export class Chat {
     this.jealousy = null;  // and how she takes your other AIs
     this.onMessage = null; // () => void: you said something to her
     this.waitingWhen = null; // a reminder you asked for without saying when: { text, until }
+    this.speaking = null; // { audio, url }: Fono reading her answer aloud (Linux)
+    this.speakRun = 0;    // a synthesis from an older answer must not play over the next one
+    panel.onVoiceStop = () => this.stopSpeak();
     host.onChatDelta(({ id, text }) => this.onDelta(id, text));
   }
 
@@ -243,6 +246,8 @@ export class Chat {
         close: t.close,
         noteTag: t.noteTag,
         note: status.local ? t.note : t.noteCloud,
+        // Linux: the bar records and Fono transcribes; these are what its button says
+        voice: { mic: t.mic, preparing: t.preparing, listening: t.listening, transcribing: t.transcribing, noMic: t.noMic, micDenied: t.micDenied, notHeard: t.notHeard, voiceOffline: t.voiceOffline, voiceFailed: t.voiceFailed },
       },
       onSend: (text) => this.send(text),
       onLeave: () => this.close(),
@@ -261,6 +266,8 @@ export class Chat {
   close() {
     if (!this.open) return;
     this.open = false;
+    this.stopSpeak();
+    this.panel.setVoiceError('');
     if (this.turn) this.host.chatStop(this.turn);
     this.turn = 0;
     this.host.focusOverlay(false);
@@ -268,8 +275,61 @@ export class Chat {
     this.capri.nextGaze = performance.now() + 60000;
   }
 
+  // Fono reads her answer aloud (Linux): automatic voice, one WAV per answer. Muted, or with the
+  // voice replies off in her menu: nothing. Stopping it (the panel, a new message, closing) aborts
+  // the request too, so a slow synthesis never lands on the next answer.
+  async speak(text) {
+    const said = String(text || '').trim();
+    if (!said || said === '…') return;
+    this.stopSpeak();
+    const run = this.speakRun;
+    const cfg = await this.host.getConfig().catch(() => null);
+    if (!cfg || cfg.muted || cfg.fonoSpeak === false || !(cfg.volume > 0) || run !== this.speakRun) return;
+    this.panel.setVoiceStop(true, this.t.stopVoice);
+    const res = await this.host.fonoSpeak(said).catch(() => ({ ok: false }));
+    if (!res.ok || run !== this.speakRun) {
+      if (run === this.speakRun) {
+        this.panel.setVoiceStop(false);
+        if (res.code === 'fono-offline') this.panel.setVoiceError(this.t.voiceOffline);
+      }
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([res.audio], { type: 'audio/wav' }));
+    const audio = new Audio(url);
+    audio.volume = Math.max(0, Math.min(1, Number(cfg.volume) || 0));
+    this.speaking = { audio, url };
+    const done = () => this.stopSpeak();
+    audio.addEventListener('ended', done);
+    audio.addEventListener('error', done);
+    audio.play().catch(done);
+  }
+
+  stopSpeak() {
+    this.speakRun++;
+    this.host.fonoSpeakStop(); // an answer still being synthesized: dropped
+    const playing = this.speaking;
+    this.speaking = null;
+    this.panel.setVoiceStop(false);
+    if (!playing) return;
+    playing.audio.pause();
+    playing.audio.src = '';
+    URL.revokeObjectURL(playing.url);
+  }
+
+  // Linux: what the bar's mic is doing, or why it couldn't hear you, said in her panel
+  voice(payload) {
+    if (!payload || !payload.state) return;
+    if (payload.state === 'error') this.panel.setVoiceError(String(payload.message || ''));
+    else if (payload.state === 'preparing' || payload.state === 'listening') {
+      this.stopSpeak(); // never record her own voice
+      this.panel.setVoiceError('');
+    } else if (payload.state === 'idle') this.panel.setVoiceError('');
+  }
+
   async send(text) {
     if (this.turn || !this.open) return;
+    this.stopSpeak(); // a new message cuts the previous answer's voice
+    this.panel.setVoiceError('');
     const id = Date.now();
     this.turn = id;
     this.answer = '';
@@ -332,6 +392,7 @@ export class Chat {
     this.panel.stream(answer, { done: true });
     this.panel.setFace(mood(answer));
     this.panel.setChatBusy(false);
+    if (!this.agent) this.speak(answer); // Fono reads it aloud (Linux), as it comes back
     if (!this.agent) this.after(res.text, answer, asked, early, text);
     this.listApps(); // fresh for the next message
   }
@@ -379,7 +440,8 @@ export class Chat {
     }
     const answer = clean(res.text).replace(/^["“«]\s*|\s*["”»]$/g, '') || '…';
     this.seen = { text: answer, at: Date.now() };
-    return say(answer, mood(answer));
+    say(answer, mood(answer));
+    if (!this.agent) this.speak(answer);
   }
 
   // an answer of hers, kept with your message before it

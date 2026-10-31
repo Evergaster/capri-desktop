@@ -76,7 +76,8 @@ export class Setup {
     if (status && !status.ok) {
       if (status.code === 'nokey') return this.paste(status.provider);
       if (status.code === 'nourl') return this.address();
-      if (!status.provider || status.provider === 'ollama') {
+      if (status.code === 'fono-offline') why = t.fonoOffline;
+      else if (!status.provider || status.provider === 'ollama') {
         const state = await this.host.ollamaState();
         why = !state.installed ? t.why.noOllama : !state.running ? t.why.asleep : t.why.noModel;
       } else {
@@ -90,6 +91,7 @@ export class Setup {
       quote: [why, t.whoHow].filter(Boolean).join('\n'),
       actions: [
         { id: 'local', label: t.local, primary: true },
+        { id: 'fono', label: t.fono },
         { id: 'online', label: t.online },
         { id: 'key', label: t.key },
         { id: 'opencode', label: t.opencode },
@@ -97,6 +99,7 @@ export class Setup {
       ],
     });
     if (id === 'local') return this.ollama();
+    if (id === 'fono') return this.use('fono');
     if (id === 'online') return this.use('pollinations');
     if (id === 'key') return this.pickKeyed();
     if (id === 'opencode') return this.use('opencode');
@@ -197,7 +200,7 @@ export class Setup {
   async use(provider) {
     this.working(this.t.checking);
     const res = await this.host.useProvider({ provider });
-    return res.ok ? this.done() : this.fail(this.t.failed, res.error);
+    return res.ok ? this.done() : this.fail(this.t.failed, provider === 'fono' ? this.t.fonoOffline : res.error);
   }
 
   async pickKeyed() {

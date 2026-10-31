@@ -748,6 +748,20 @@ html[data-motion='reduced'] .panel__bar {
   padding-inline: 10px;
 }
 
+/* Linux: Fono reads her answer aloud; this stops it, and the line above says what went wrong */
+.panel__voice {
+  margin: 9px 0 0;
+}
+
+.panel__voice-error {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--red);
+}
+
 /* it's an AI, and it's not her voice from the show: said on every chat, plainly */
 .panel__note {
   margin: 9px 0 0;
@@ -1011,7 +1025,8 @@ html[data-motion='reduced'] .panel[data-kind='alert'] .panel__state {
 }
 
 .bar__send,
-.bar__close {
+.bar__close,
+.bar__mic {
   flex: none;
   border: 0;
   padding: 0 14px;
@@ -1033,6 +1048,46 @@ html[data-motion='reduced'] .panel[data-kind='alert'] .panel__state {
   padding: 0 10px;
   background: var(--ink-2);
   color: var(--paper-3);
+}
+
+/* the chat's voice: recorded here, transcribed by Fono in main (Linux) */
+.bar__meter {
+  flex: none;
+  align-self: center;
+  width: 64px;
+  height: 6px;
+  background: var(--ink-2);
+  overflow: hidden;
+}
+
+.bar__meter i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--green);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 60ms linear;
+}
+
+.bar__meter.is-hot i {
+  background: var(--red);
+}
+
+.bar__mic {
+  padding: 0 10px;
+  background: var(--ink-2);
+  color: var(--paper);
+}
+
+.bar__mic:hover {
+  background: var(--green);
+  color: var(--ink);
+}
+
+.bar__mic.is-recording {
+  background: var(--red);
+  color: var(--ink);
 }
 
 .bar__close:hover {

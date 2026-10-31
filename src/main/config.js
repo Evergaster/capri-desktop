@@ -20,6 +20,8 @@ const DEFAULTS = {
   provider: 'ollama', // who answers her chat: a key of llm.js PROVIDERS
   apiKeys: {},       // { openai: 'sk-...' }, else the provider's env variable
   customUrl: '',     // the 'custom' provider: any OpenAI-compatible base URL (http://host:port/v1)
+  fonoUrl: '',       // the 'fono' provider's server (empty: http://127.0.0.1:11434/v1)
+  fonoSpeak: process.platform === 'linux', // Linux: read her chat answers aloud with Fono's voice (its STT/TTS API)
   claudeCwd: null,   // the folder Claude Code works in (null: your home folder)
   userName: '',      // what she calls you
   persona: '',       // how you want her, in your words (her chat)
